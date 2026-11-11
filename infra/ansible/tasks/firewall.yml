@@ -1,0 +1,47 @@
+# Only Tailscale can reach PiVault. The home network can SSH in (and optionally use
+# plain HTTP). No router port forwarding is ever needed.
+
+- name: Deny incoming connections by default
+  community.general.ufw:
+    direction: incoming
+    default: deny
+
+- name: Allow outgoing connections
+  community.general.ufw:
+    direction: outgoing
+    default: allow
+
+- name: Allow everything arriving over Tailscale
+  community.general.ufw:
+    rule: allow
+    interface: tailscale0
+    direction: in
+
+- name: Allow SSH from the home network
+  community.general.ufw:
+    rule: allow
+    proto: tcp
+    port: "22"
+    src: "{{ item }}"
+  loop: "{{ pivault_lan_cidrs }}"
+
+- name: Allow pivault.local name lookups from the home network
+  community.general.ufw:
+    rule: allow
+    proto: udp
+    port: "5353"
+    src: "{{ item }}"
+  loop: "{{ pivault_lan_cidrs }}"
+
+- name: Allow or block plain HTTP from the home network
+  community.general.ufw:
+    rule: allow
+    proto: tcp
+    port: "80"
+    src: "{{ item }}"
+    delete: "{{ not (allow_lan_http | bool) }}"
+  loop: "{{ pivault_lan_cidrs }}"
+
+- name: Turn the firewall on
+  community.general.ufw:
+    state: enabled

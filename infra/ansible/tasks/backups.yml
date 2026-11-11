@@ -1,0 +1,80 @@
+# Scheduled jobs (systemd timers):
+#   02:30 nightly   database dump into the pool
+#   03:00 nightly   SnapRAID sync (updates parity)
+#   03:30 nightly   restic backup to the external drive and/or Backblaze B2
+#   Sunday 04:30    SnapRAID scrub (checks for silent corruption)
+#   1st of month    restore one random folder from backup and compare hashes
+
+- name: Install the job units
+  ansible.builtin.template:
+    src: pivault-job.service.j2
+    dest: "/etc/systemd/system/pivault-{{ item.name }}.service"
+    mode: "0644"
+  loop: "{{ pivault_jobs }}"
+  register: job_services
+
+- name: Install the job timers
+  ansible.builtin.template:
+    src: pivault-job.timer.j2
+    dest: "/etc/systemd/system/pivault-{{ item.name }}.timer"
+    mode: "0644"
+  loop: "{{ pivault_jobs }}"
+  register: job_timers
+
+- name: Start the timers now and on every boot
+  ansible.builtin.systemd:
+    name: "pivault-{{ item.name }}.timer"
+    enabled: true
+    state: started
+    daemon_reload: "{{ job_services is changed or job_timers is changed }}"
+  loop: "{{ pivault_jobs }}"
+
+- name: Generate the backup encryption password
+  ansible.builtin.shell: |
+    set -e
+    umask 077
+    # Reuse the password kept on drive 1 (a rebuilt SD card must be able to read the
+    # existing backups); otherwise make a new one.
+    if [ -s /mnt/disk1/.pivault/restic-password ]; then
+      cp /mnt/disk1/.pivault/restic-password /etc/pivault/restic-password
+    else
+      openssl rand -base64 32 > /etc/pivault/restic-password
+    fi
+  args:
+    creates: /etc/pivault/restic-password
+    executable: /bin/bash
+
+- name: Keep a copy of the backup password on drive 1
+  ansible.builtin.shell: |
+    set -e
+    umask 077
+    mkdir -p /mnt/disk1/.pivault
+    if ! cmp -s /etc/pivault/restic-password /mnt/disk1/.pivault/restic-password; then
+      cp /etc/pivault/restic-password /mnt/disk1/.pivault/restic-password
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install the backup settings example
+  ansible.builtin.copy:
+    dest: /etc/pivault/restic.env.example
+    mode: "0600"
+    content: |
+      # Copy to /etc/pivault/restic.env and fill in what you use. Backups start the
+      # next night; run `sudo pivault-backup` to start one now.
+      #
+      # IMPORTANT: /etc/pivault/restic-password encrypts the backups. Save a copy of it
+      # somewhere that is not this Pi (a password manager). Without it the backups
+      # cannot be read.
+      RESTIC_PASSWORD_FILE=/etc/pivault/restic-password
+
+      # An external USB drive. Mount it first (for example at /mnt/backup) and add it
+      # to /etc/fstab with the nofail option.
+      #RESTIC_REPO_LOCAL=/mnt/backup/restic
+      #RESTIC_LOCAL_MOUNT=/mnt/backup
+
+      # Backblaze B2 (offsite). Create a bucket and an application key for it.
+      #RESTIC_REPO_B2=b2:your-bucket-name:pivault
+      #B2_ACCOUNT_ID=your-key-id
+      #B2_ACCOUNT_KEY=your-application-key

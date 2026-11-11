@@ -1,0 +1,72 @@
+# Defaults for the PiVault playbook. Override them in /etc/pivault/ansible-vars.yml on
+# the Pi (the SD-card image writes that file), or with -e on the command line.
+
+pivault_home: /opt/pivault
+pivault_hostname: pivault
+pivault_timezone: America/Toronto
+
+# The login user on the Pi. uid 1000 owns the stored files (it matches the user inside
+# the containers).
+pivault_user: pi
+
+# The first PiVault account. A random password is generated when this is empty;
+# `sudo pivault-info` shows it.
+pivault_admin_email: admin@pivault.local
+pivault_admin_password: ""
+
+# Your Pi's Tailscale name (pivault.<tailnet>.ts.net). Detected automatically once the
+# Pi has joined your tailnet, so this is normally left empty.
+pivault_domain: ""
+
+# Optional: a Tailscale auth key (tskey-auth-...) joins the tailnet without a browser.
+# Without one, run `sudo tailscale up` on the Pi once and open the link it prints.
+tailscale_authkey: ""
+
+# Home-network ranges allowed to SSH in. Everything else is only reachable over Tailscale.
+pivault_lan_cidrs:
+  - 192.168.0.0/16
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+
+# Also serve plain HTTP to the home network (http://pivault.local). Useful for a first
+# test before Tailscale HTTPS is on. iPhones only allow plain HTTP to local addresses.
+allow_lan_http: false
+
+# How many pivault-dataN / pivault-parityN labels to look for.
+pivault_max_data_disks: 8
+pivault_max_parity_disks: 2
+
+# A drive in the pool is treated as full once it has less than this much free.
+pivault_pool_min_free: 4G
+
+# true when running the playbook from another computer: copies this repository to the
+# Pi first. The SD-card image already contains it.
+pivault_sync_repo: false
+
+# Nightly schedule (local time).
+pivault_time_pg_dump: "02:30"
+pivault_time_snapraid_sync: "03:00"
+pivault_time_backup: "03:30"
+
+# Scheduled jobs. `when` is a systemd OnCalendar expression.
+pivault_jobs:
+  - name: pg-dump
+    description: PiVault database dump
+    command: "{{ pivault_home }}/scripts/pg-dump.sh"
+    when: "*-*-* {{ pivault_time_pg_dump }}:00"
+  - name: snapraid-sync
+    description: PiVault SnapRAID parity sync
+    command: "{{ pivault_home }}/scripts/snapraid-sync.sh sync"
+    when: "*-*-* {{ pivault_time_snapraid_sync }}:00"
+  - name: backup
+    description: PiVault restic backup
+    command: "{{ pivault_home }}/scripts/backup.sh"
+    when: "*-*-* {{ pivault_time_backup }}:00"
+  - name: snapraid-scrub
+    description: PiVault SnapRAID scrub
+    command: "{{ pivault_home }}/scripts/snapraid-sync.sh scrub"
+    when: "Sun *-*-* 04:30:00"
+  - name: restore-test
+    description: PiVault monthly restore test
+    command: "{{ pivault_home }}/scripts/restore-test.sh"
+    when: "*-*-01 05:00:00"

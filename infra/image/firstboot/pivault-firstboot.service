@@ -1,0 +1,20 @@
+[Unit]
+Description=PiVault first-boot setup
+Documentation=file:///opt/pivault/docs/SETUP.md
+After=network-online.target cloud-final.service userconfig.service
+Wants=network-online.target
+# Runs until it has succeeded once.
+ConditionPathExists=!/var/lib/pivault/provisioned
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/pivault/infra/image/firstboot/firstboot.sh
+# No internet yet, or a download failed: try again in two minutes.
+Restart=on-failure
+RestartSec=120
+TimeoutStartSec=0
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

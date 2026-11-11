@@ -1,0 +1,64 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main]
+    paths: ["backend/**", ".github/workflows/backend-ci.yml"]
+  pull_request:
+    paths: ["backend/**", ".github/workflows/backend-ci.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pivault
+          POSTGRES_PASSWORD: pivault
+          POSTGRES_DB: pivault_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pivault -d pivault_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PIVAULT_TEST_DATABASE_URL: postgresql+asyncpg://pivault:pivault@localhost:5432/pivault_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/constraints.txt
+
+      # ffmpeg makes video poster frames; the video tests skip themselves without it.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt -c constraints.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Tests (against PostgreSQL)
+        run: pytest --cov=app --cov-report=term-missing:skip-covered --cov-report=xml
+
+      - name: Migrations match the models
+        env:
+          PIVAULT_DATABASE_URL: postgresql+asyncpg://pivault:pivault@localhost:5432/pivault_test
+        run: |
+          # The tests leave their tables behind; start from an empty schema.
+          PGPASSWORD=pivault psql -h localhost -U pivault -d pivault_test \
+            -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+          alembic upgrade head
+          alembic check
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml

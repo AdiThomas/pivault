@@ -1,0 +1,11 @@
+# Managed by the PiVault Ansible playbook.
+[Unit]
+Description={{ item.description }} (timer)
+
+[Timer]
+OnCalendar={{ item.when }}
+# Run at the next boot if the Pi was off at the scheduled time.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

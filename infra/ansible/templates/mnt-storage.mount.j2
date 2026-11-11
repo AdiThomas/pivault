@@ -1,0 +1,18 @@
+# Managed by the PiVault Ansible playbook.
+#
+# mergerfs presents the data drives as one folder. New files go to the drive with the
+# most free space. The pool only mounts when every data drive is mounted; if it cannot
+# mount, the Pi still boots (so you can SSH in and fix it) and PiVault refuses to start.
+[Unit]
+Description=PiVault storage pool (mergerfs)
+RequiresMountsFor={{ pivault_data_paths | join(' ') }}
+Before=docker.service
+
+[Mount]
+What={{ pivault_data_paths | join(':') }}
+Where=/mnt/storage
+Type=fuse.mergerfs
+Options=cache.files=off,dropcacheonclose=true,category.create=mfs,moveonenospc=true,minfreespace={{ pivault_pool_min_free }},fsname=pivault-pool,allow_other
+
+[Install]
+WantedBy=multi-user.target

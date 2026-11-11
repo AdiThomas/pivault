@@ -1,0 +1,42 @@
+name: EAS build (iOS)
+
+# Builds the iPhone app in Expo's cloud, with no Mac needed. Run it by hand from the
+# Actions tab. Needs:
+#   secret EXPO_TOKEN   from https://expo.dev/settings/access-tokens
+# and a one-time `npx eas-cli build --platform ios` on your PC to set up Apple signing
+# (that step asks you to log in to your Apple Developer account).
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Build profile from mobile/eas.json
+        type: choice
+        default: preview
+        options: [development, preview, production]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Start the build
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: eas build --platform ios --profile "$PROFILE" --non-interactive --no-wait

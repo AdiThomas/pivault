@@ -1,0 +1,29 @@
+# Runs the backend test suite against real PostgreSQL.
+#   docker compose -f deploy/docker-compose.test.yml run --rm --build tests
+name: pivault-test
+
+services:
+  tests:
+    build:
+      context: ../backend
+      target: test
+    environment:
+      PIVAULT_TEST_DATABASE_URL: postgresql+asyncpg://pivault:pivault@postgres:5432/pivault_test
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["pytest", "--cov=app", "--cov-report=term-missing:skip-covered"]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pivault
+      POSTGRES_PASSWORD: pivault
+      POSTGRES_DB: pivault_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pivault -d pivault_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

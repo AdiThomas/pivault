@@ -1,0 +1,150 @@
+# Mounts whatever PiVault drives exist. Drives are found by filesystem label
+# (pivault-data1, pivault-data2, pivault-parity1, ...), which `sudo pivault-setup-disks`
+# writes when it formats them. Nothing here formats or erases anything.
+#
+# With no labelled drives, /mnt/storage and /mnt/disk1 are ordinary folders on the SD
+# card, so PiVault works before the SSDs arrive. The paths never change, which is why
+# nothing above the storage layer needs to know what hardware is underneath.
+
+- name: Look for PiVault data drives
+  ansible.builtin.command: "blkid -L pivault-data{{ item }}"
+  loop: "{{ range(1, pivault_max_data_disks + 1) | list }}"
+  register: data_probe
+  changed_when: false
+  failed_when: false
+
+- name: Look for PiVault parity drives
+  ansible.builtin.command: "blkid -L pivault-parity{{ item }}"
+  loop: "{{ range(1, pivault_max_parity_disks + 1) | list }}"
+  register: parity_probe
+  changed_when: false
+  failed_when: false
+
+- name: Note which drives are present
+  ansible.builtin.set_fact:
+    pivault_data_disks: "{{ data_probe.results | selectattr('rc', 'equalto', 0) | map(attribute='item') | list }}"
+    pivault_parity_disks: "{{ parity_probe.results | selectattr('rc', 'equalto', 0) | map(attribute='item') | list }}"
+
+- name: Work out the mount points
+  ansible.builtin.set_fact:
+    pivault_data_paths: "{{ ['/mnt/disk'] | product(pivault_data_disks | map('string')) | map('join') | list }}"
+    pivault_parity_paths: "{{ ['/mnt/parity'] | product(pivault_parity_disks | map('string')) | map('join') | list }}"
+
+- name: Show the storage layout
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Data drives at ' ~ (pivault_data_paths | join(', ')) ~ '. Parity at ' ~ (pivault_parity_paths | join(', ') or 'none (no parity drive)') ~ '.'
+         if pivault_data_disks | length > 0
+         else 'No PiVault drives found: storing on the SD card for now. Run `sudo pivault-setup-disks` once the SSDs are plugged in.' }}
+
+- name: Refuse a pool that has no first drive
+  ansible.builtin.assert:
+    that: 1 in pivault_data_disks
+    fail_msg: >-
+      Found PiVault drives but not pivault-data1, which also holds the database.
+      Check the drive is plugged in and powered.
+  when: pivault_data_disks | length > 0
+
+- name: Create the mount points
+  ansible.builtin.command: "mkdir -p {{ item }}"
+  args:
+    creates: "{{ item }}"
+  loop: "{{ ['/mnt/storage', '/mnt/disk1'] + pivault_data_paths + pivault_parity_paths }}"
+
+# If a drive drops out, its empty mount point must not silently collect new photos on
+# the SD card. Locking the unmounted folder makes writes fail loudly instead.
+- name: Lock the empty mount points
+  ansible.builtin.shell: |
+    set -e
+    for dir in {{ (pivault_data_paths + pivault_parity_paths + ['/mnt/storage']) | join(' ') }}; do
+      if ! mountpoint -q "$dir" && [ -z "$(ls -A "$dir")" ]; then
+        chattr +i "$dir" || true
+      fi
+    done
+  args:
+    executable: /bin/bash
+  when: pivault_data_disks | length > 0
+  changed_when: false
+
+- name: Mount the data drives
+  ansible.posix.mount:
+    path: "/mnt/disk{{ item }}"
+    src: "LABEL=pivault-data{{ item }}"
+    fstype: ext4
+    opts: defaults,noatime,nofail,x-systemd.device-timeout=30s
+    passno: "2"
+    state: mounted
+  loop: "{{ pivault_data_disks }}"
+
+- name: Mount the parity drives
+  ansible.posix.mount:
+    path: "/mnt/parity{{ item }}"
+    src: "LABEL=pivault-parity{{ item }}"
+    fstype: ext4
+    opts: defaults,noatime,nofail,x-systemd.device-timeout=30s
+    passno: "2"
+    state: mounted
+  loop: "{{ pivault_parity_disks }}"
+
+# The pool is a systemd mount unit rather than an fstab line: mergerfs rejects the
+# nofail option, and without it a missing drive would stop the Pi from booting.
+- name: Define the storage pool
+  ansible.builtin.template:
+    src: mnt-storage.mount.j2
+    dest: /etc/systemd/system/mnt-storage.mount
+    mode: "0644"
+  register: pool_unit
+  when: pivault_data_disks | length > 0
+
+- name: Mount the storage pool now and on every boot
+  ansible.builtin.systemd:
+    name: mnt-storage.mount
+    enabled: true
+    state: "{{ 'restarted' if pool_unit is changed else 'started' }}"
+    daemon_reload: "{{ pool_unit is changed }}"
+  when: pivault_data_disks | length > 0
+
+- name: Check the pool is really mounted
+  ansible.builtin.shell: |
+    set -e
+    mountpoint -q /mnt/storage
+    # Every data drive must be a branch of the pool.
+    {% for path in pivault_data_paths %}
+    mountpoint -q {{ path }}
+    {% endfor %}
+    touch /mnt/storage/.pivault-pool-check && rm /mnt/storage/.pivault-pool-check
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: pivault_data_disks | length > 0
+
+- name: Configure SnapRAID
+  ansible.builtin.template:
+    src: snapraid.conf.j2
+    dest: /etc/snapraid.conf
+    mode: "0644"
+  when: pivault_parity_disks | length > 0
+
+- name: Create the SnapRAID state directory
+  ansible.builtin.file:
+    path: /var/lib/snapraid
+    state: directory
+    mode: "0755"
+  when: pivault_parity_disks | length > 0
+
+- name: Create the PiVault storage folder
+  ansible.builtin.file:
+    path: /mnt/storage/pivault
+    state: directory
+    owner: "1000"
+    group: "1000"
+    mode: "0750"
+
+- name: Create the database folder (on one drive, outside the pool)
+  ansible.builtin.file:
+    path: /mnt/disk1/postgres
+    state: directory
+    mode: "0700"
+    # The postgres container takes ownership of it on first start.
+    owner: "70"
+    group: "70"

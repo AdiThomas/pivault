@@ -1,0 +1,60 @@
+- name: Create the apt keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Add Docker's signing key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/debian/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+
+- name: Add Docker's package repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/docker.list
+    mode: "0644"
+    content: >
+      deb [arch={{ pivault_deb_arch }} signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable
+  vars:
+    pivault_deb_arch: "{{ 'arm64' if ansible_architecture in ['aarch64', 'arm64'] else 'amd64' }}"
+  register: docker_repo
+
+- name: Refresh the package list
+  ansible.builtin.apt:
+    update_cache: true
+  when: docker_repo is changed
+
+- name: Install Docker Engine and the Compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+
+- name: Rotate container logs (less wear on the SD card)
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "10m", "max-file": "3" }
+      }
+  register: docker_daemon_json
+
+- name: Start Docker now and on every boot
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: "{{ 'restarted' if docker_daemon_json is changed else 'started' }}"
+
+- name: Let the login user run docker
+  ansible.builtin.user:
+    name: "{{ pivault_user }}"
+    groups: docker
+    append: true

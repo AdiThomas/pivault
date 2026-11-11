@@ -1,0 +1,14 @@
+# Used when the build context is the repository root (deploy/web.Dockerfile).
+.git
+**/node_modules
+mobile/dist
+mobile/.expo
+mobile/e2e
+mobile/test-results
+mobile/playwright-report
+backend
+docs
+infra
+scripts
+**/.env
+deploy/secrets

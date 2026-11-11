@@ -1,0 +1,30 @@
+# Managed by the PiVault Ansible playbook.
+#
+# SnapRAID keeps a recovery copy ("parity") so the pool survives one drive failing.
+# It is updated nightly, so files added since the last sync are not yet protected.
+# It is not a backup: it does not protect against deleting the wrong thing, fire or
+# theft. restic handles that.
+
+{% for n in pivault_parity_disks %}
+{{ 'parity' if loop.first else (loop.index ~ '-parity') }} /mnt/parity{{ n }}/snapraid.parity
+{% endfor %}
+
+# Copies of the file list. Keep one off the data drives and one on each data drive.
+content /var/lib/snapraid/snapraid.content
+{% for n in pivault_data_disks %}
+content /mnt/disk{{ n }}/snapraid.content
+{% endfor %}
+
+{% for n in pivault_data_disks %}
+data d{{ n }} /mnt/disk{{ n }}
+{% endfor %}
+
+# The live database is excluded (it changes constantly); its nightly dump is protected.
+exclude /postgres/
+exclude /pivault/tmp/
+exclude *.part
+exclude *.partial
+exclude /lost+found/
+exclude /snapraid.content*
+
+autosave 100

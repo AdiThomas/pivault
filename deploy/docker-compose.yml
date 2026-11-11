@@ -1,0 +1,155 @@
+# PiVault on the Raspberry Pi.
+#
+#   cd /opt/pivault/deploy
+#   cp .env.example .env      # then edit it (the Ansible playbook does this for you)
+#   docker compose up -d --build
+#
+# Only Caddy listens on the network (ports 80 and 443). Everything else is reachable
+# from inside Docker or from the Pi itself.
+name: pivault
+
+x-backend: &backend
+  image: ${PIVAULT_BACKEND_IMAGE:-pivault-backend:local}
+  build:
+    context: ../backend
+    target: runtime
+  restart: unless-stopped
+  environment:
+    PIVAULT_ENV: prod
+    PIVAULT_DATABASE_URL: postgresql+asyncpg://pivault:${POSTGRES_PASSWORD}@postgres:5432/pivault
+    PIVAULT_REDIS_URL: redis://redis:6379/0
+    PIVAULT_STORAGE_ROOT: /data
+    PIVAULT_SECRET_KEY: ${PIVAULT_SECRET_KEY}
+    PIVAULT_ADMIN_EMAIL: ${PIVAULT_ADMIN_EMAIL}
+    PIVAULT_ADMIN_PASSWORD: ${PIVAULT_ADMIN_PASSWORD}
+    PIVAULT_MAX_UPLOAD_BYTES: ${PIVAULT_MAX_UPLOAD_BYTES:-10737418240}
+    PIVAULT_TRASH_DAYS: ${PIVAULT_TRASH_DAYS:-30}
+    # Only Caddy (on the host) and Docker's own networks can reach the API.
+    FORWARDED_ALLOW_IPS: "*"
+  volumes:
+    - ${PIVAULT_STORAGE_DIR:-/mnt/storage/pivault}:/data
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  caddy:
+    image: ${PIVAULT_WEB_IMAGE:-pivault-web:local}
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+    restart: unless-stopped
+    # Host networking, so the Pi's firewall (ufw) decides who can connect. Ports
+    # published by Docker would bypass ufw.
+    network_mode: host
+    environment:
+      PIVAULT_DOMAIN: ${PIVAULT_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      # Caddy asks the Tailscale daemon for the HTTPS certificate of your ts.net name.
+      - /var/run/tailscale:/var/run/tailscale:ro
+    depends_on:
+      - api
+
+  api:
+    <<: *backend
+    command: ["api"]
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  worker:
+    <<: *backend
+    command: ["worker"]
+    healthcheck:
+      test: ["CMD", "arq", "--check", "app.worker.WorkerSettings"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pivault
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: pivault
+    volumes:
+      # Directly on one SSD: not on the mergerfs pool and not on the SD card.
+      - ${PIVAULT_POSTGRES_DIR:-/mnt/disk1/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pivault -d pivault"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # The queue only holds pending thumbnail jobs, and stuck assets are re-queued by
+    # the worker, so nothing here needs to survive a restart.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=90d
+      - --storage.tsdb.retention.size=2GB
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    restart: unless-stopped
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|run|var/lib/docker/.+)($$|/)
+      - --collector.textfile.directory=/host/textfile
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+      # The backup scripts write their last-success times here.
+      - /var/lib/pivault/metrics:/host/textfile:ro
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/pivault.json
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  caddy_data:
+  caddy_config:
+  prometheus_data:
+  grafana_data:

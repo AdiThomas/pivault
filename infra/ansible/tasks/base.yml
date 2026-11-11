@@ -1,0 +1,116 @@
+- name: Set the hostname
+  ansible.builtin.hostname:
+    name: "{{ pivault_hostname }}"
+
+- name: Make the hostname resolve locally
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s'
+    line: "127.0.1.1 {{ pivault_hostname }}"
+    # /etc/hosts is a bind mount inside containers and cannot be replaced by rename.
+    unsafe_writes: true
+
+- name: Set the time zone
+  community.general.timezone:
+    name: "{{ pivault_timezone }}"
+
+- name: Install system packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - git
+      - rsync
+      - ufw
+      - parted
+      - e2fsprogs
+      - smartmontools
+      - mergerfs
+      - snapraid
+      - restic
+      - unattended-upgrades
+      - avahi-daemon
+      - openssl
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install security updates automatically
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+- name: Create the journald drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    mode: "0755"
+
+- name: Keep the system journal small (less wear on the SD card)
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/pivault.conf
+    mode: "0644"
+    content: |
+      [Journal]
+      SystemMaxUse=100M
+      MaxRetentionSec=1month
+
+- name: Create PiVault directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/pivault, mode: "0750" }
+    - { path: /var/lib/pivault, mode: "0755" }
+    - { path: /var/lib/pivault/metrics, mode: "0755" }
+
+- name: Copy this repository to the Pi
+  ansible.posix.synchronize:
+    src: "{{ playbook_dir }}/../../"
+    dest: "{{ pivault_home }}/"
+    delete: true
+    rsync_opts:
+      - "--exclude=.git"
+      - "--exclude=node_modules"
+      - "--exclude=mobile/dist"
+      - "--exclude=mobile/.expo"
+      - "--exclude=mobile/test-results"
+      - "--exclude=mobile/playwright-report"
+      - "--exclude=infra/image/build"
+      - "--exclude=infra/image/config.env"
+      - "--exclude=deploy/.env"
+      - "--exclude=__pycache__"
+  when: pivault_sync_repo | bool
+
+- name: Make the maintenance scripts executable
+  ansible.builtin.file:
+    path: "{{ pivault_home }}/scripts/{{ item }}"
+    mode: "0755"
+  loop:
+    - setup-disks.sh
+    - pg-dump.sh
+    - snapraid-sync.sh
+    - backup.sh
+    - restore-test.sh
+    - info.sh
+    - apply.sh
+    - smoke-test.sh
+
+- name: Add short command names for the maintenance scripts
+  ansible.builtin.file:
+    src: "{{ pivault_home }}/scripts/{{ item.script }}"
+    dest: "/usr/local/bin/{{ item.name }}"
+    state: link
+  loop:
+    - { name: pivault-setup-disks, script: setup-disks.sh }
+    - { name: pivault-pg-dump, script: pg-dump.sh }
+    - { name: pivault-snapraid-sync, script: snapraid-sync.sh }
+    - { name: pivault-backup, script: backup.sh }
+    - { name: pivault-restore-test, script: restore-test.sh }
+    - { name: pivault-info, script: info.sh }
+    - { name: pivault-apply, script: apply.sh }

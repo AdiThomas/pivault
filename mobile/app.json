@@ -1,0 +1,67 @@
+{
+  "expo": {
+    "name": "PiVault",
+    "slug": "pivault",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "pivault",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0B0D10",
+    "ios": {
+      "bundleIdentifier": "com.pivault.app",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        },
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.pivault.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0D10",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "single",
+      "favicon": "./assets/images/favicon.png",
+      "name": "PiVault",
+      "shortName": "PiVault",
+      "themeColor": "#0B0D10",
+      "backgroundColor": "#0B0D10"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0B0D10",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 96
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "PiVault reads your photos and videos so it can back them up to your own server.",
+          "savePhotosPermission": "PiVault saves photos and videos you download from your server to your library.",
+          "isAccessMediaLocationEnabled": true,
+          "granularPermissions": ["photo", "video"]
+        }
+      ],
+      "expo-background-task",
+      "expo-secure-store",
+      "expo-sqlite",
+      "expo-video",
+      "expo-sharing"
+    ],
+    "experiments": {
+      "reactCompiler": true
+    }
+  }
+}

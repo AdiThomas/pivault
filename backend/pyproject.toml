@@ -1,0 +1,25 @@
+[project]
+name = "pivault-backend"
+version = "1.0.0"
+description = "PiVault API and worker: self-hosted photo, video and file storage"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["alembic"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = ["B008"]  # FastAPI's Depends() in argument defaults is the intended pattern
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/cli.py"]
+concurrency = ["greenlet", "thread"]

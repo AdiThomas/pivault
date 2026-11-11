@@ -1,0 +1,63 @@
+# PiVault reverse proxy.
+#
+# PIVAULT_DOMAIN is your Pi's Tailscale name, for example pivault.tail1234.ts.net.
+# Caddy gets the HTTPS certificate for it from the Tailscale daemon automatically
+# (turn on HTTPS certificates in the Tailscale admin console first).
+
+(pivault) {
+	encode zstd gzip
+
+	# Uploads can be large videos.
+	request_body {
+		max_size 11GB
+	}
+
+	# Prometheus scrapes the API directly inside Docker; never expose this path.
+	handle /metrics {
+		respond "Not found" 404
+	}
+
+	@api path /api/* /docs /docs/* /openapi.json
+	handle @api {
+		reverse_proxy 127.0.0.1:8000 {
+			# Send upload bytes to the API as they arrive instead of buffering them.
+			flush_interval -1
+			transport http {
+				read_timeout 30m
+				write_timeout 30m
+			}
+		}
+	}
+
+	# Monitoring dashboard.
+	handle /grafana* {
+		reverse_proxy 127.0.0.1:3000
+	}
+
+	# The PiVault web app (the same code as the phone app). Unknown paths are app
+	# routes, so they get the app shell.
+	handle {
+		root * /srv/web
+		@static path /_expo/* /assets/*
+		header @static Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+}
+
+# HTTPS over Tailscale.
+{$PIVAULT_DOMAIN} {
+	import pivault
+}
+
+# Plain HTTP for the home network (http://pivault.local), handy for the first test.
+# The firewall only opens this if allow_lan_http is turned on in the Ansible config.
+http:// {
+	import pivault
+}

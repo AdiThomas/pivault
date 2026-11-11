@@ -1,0 +1,80 @@
+# Local development stack for your PC (no Pi, no Tailscale, no HTTPS).
+#
+#   docker compose -f deploy/docker-compose.dev.yml up --build
+#
+# API:        http://localhost:8000        (docs at /docs)
+# Login:      admin@pivault.dev / pivault-dev-pass
+# Phone:      point the app at http://<your PC's LAN IP>:8000
+name: pivault-dev
+
+services:
+  api:
+    build:
+      context: ../backend
+      target: runtime
+    command: ["api"]
+    environment: &app-env
+      PIVAULT_ENV: dev
+      PIVAULT_DATABASE_URL: postgresql+asyncpg://pivault:pivault@postgres:5432/pivault
+      PIVAULT_REDIS_URL: redis://redis:6379/0
+      PIVAULT_STORAGE_ROOT: /data
+      PIVAULT_SECRET_KEY: dev-only-secret-key-do-not-use-on-the-pi-0123456789
+      PIVAULT_ADMIN_EMAIL: admin@pivault.dev
+      PIVAULT_ADMIN_PASSWORD: pivault-dev-pass
+      PIVAULT_CORS_ORIGINS: "*"
+      PIVAULT_LOGIN_RATE_LIMIT: "20"
+    ports:
+      - "8000:8000"
+    volumes:
+      - storage:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ../backend
+      target: runtime
+    command: ["worker"]
+    environment: *app-env
+    healthcheck:
+      test: ["CMD", "arq", "--check", "app.worker.WorkerSettings"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    volumes:
+      - storage:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pivault
+      POSTGRES_PASSWORD: pivault
+      POSTGRES_DB: pivault
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pivault -d pivault"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  storage:
+  pgdata:

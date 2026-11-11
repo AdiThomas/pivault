@@ -1,0 +1,84 @@
+- name: Create the settings file with fresh secrets (first run only)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    umask 077
+    # A rebuilt SD card reuses the settings kept next to the database, so the
+    # database password and login sessions still match the data on the drives.
+    if [ -s /mnt/disk1/.pivault/deploy.env ]; then
+      cp /mnt/disk1/.pivault/deploy.env "{{ pivault_home }}/deploy/.env"
+      exit 0
+    fi
+    admin_password="${ADMIN_PASSWORD:-$(openssl rand -base64 18 | tr -d '/+=')}"
+    cat > "{{ pivault_home }}/deploy/.env" <<EOF
+    # Written by the PiVault Ansible playbook. Edit, then run: sudo pivault-apply app
+    PIVAULT_DOMAIN=localhost
+    PIVAULT_ADMIN_EMAIL=${ADMIN_EMAIL}
+    PIVAULT_ADMIN_PASSWORD=${admin_password}
+    PIVAULT_SECRET_KEY=$(openssl rand -hex 32)
+    POSTGRES_PASSWORD=$(openssl rand -hex 24)
+    GRAFANA_ADMIN_PASSWORD=$(openssl rand -hex 12)
+    PIVAULT_STORAGE_DIR=/mnt/storage/pivault
+    PIVAULT_POSTGRES_DIR=/mnt/disk1/postgres
+    EOF
+  args:
+    creates: "{{ pivault_home }}/deploy/.env"
+    executable: /bin/bash
+  environment:
+    ADMIN_EMAIL: "{{ pivault_admin_email }}"
+    ADMIN_PASSWORD: "{{ pivault_admin_password }}"
+  no_log: true
+
+- name: Keep the settings file private
+  ansible.builtin.file:
+    path: "{{ pivault_home }}/deploy/.env"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Set the HTTPS address
+  ansible.builtin.lineinfile:
+    path: "{{ pivault_home }}/deploy/.env"
+    regexp: "^PIVAULT_DOMAIN="
+    line: "PIVAULT_DOMAIN={{ pivault_domain_effective | default('localhost') | trim }}"
+
+- name: Create the settings backup folder on drive 1
+  ansible.builtin.file:
+    path: /mnt/disk1/.pivault
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Keep a copy of the settings next to the database
+  ansible.builtin.copy:
+    src: "{{ pivault_home }}/deploy/.env"
+    dest: /mnt/disk1/.pivault/deploy.env
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Build and start PiVault (the first build takes 10 to 20 minutes on a Pi)
+  ansible.builtin.command:
+    cmd: docker compose up -d --build --remove-orphans --quiet-pull
+    chdir: "{{ pivault_home }}/deploy"
+  register: compose_up
+  changed_when: true
+
+- name: Wait for the API to answer
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8000/api/health
+    status_code: [200]
+  register: health
+  until: health.status == 200
+  retries: 40
+  delay: 5
+
+- name: Show how to reach PiVault
+  ansible.builtin.debug:
+    msg: >-
+      PiVault is running.
+      {{ 'Open https://' ~ (pivault_domain_effective | trim) ~ ' from any device on your tailnet.'
+         if (pivault_domain_effective | default('localhost') | trim) != 'localhost'
+         else 'Join Tailscale (`sudo tailscale up`), then run `sudo pivault-apply app` to get the HTTPS address.' }}
+      Run `sudo pivault-info` for the login details.
